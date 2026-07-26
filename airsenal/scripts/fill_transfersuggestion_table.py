@@ -30,6 +30,7 @@ import requests
 from prettytable import PrettyTable
 from tqdm import TqdmWarning, tqdm
 
+from airsenal.framework.data_fetcher import FPLDataFetcher
 from airsenal.framework.env import AIRSENAL_HOME
 from airsenal.framework.multiprocessing_utils import (
     CustomQueue,
@@ -429,6 +430,7 @@ def run_optimization(
     profile: bool = False,
     is_replay: bool = False,  # for replaying seasons
     max_free_transfers: int = MAX_FREE_TRANSFERS,
+    consider_available_chips: bool = False,
 ) -> tuple[Squad, dict[str, dict[str, int | list[int]]] | None]:
     """
     This is the actual main function that sets up the multiprocessing
@@ -437,6 +439,8 @@ def run_optimization(
     The chip-related variables e.g. wildcard_week are -1 if that chip
     is not to be played, 0 for 'play it any week', or the gw in which
     it should be played.
+    If consider_available_chips is True, every chip the API says this team still
+    has is considered in any gameweek, rather than only those asked for explicitly.
     """
     if chip_gameweeks is None:
         chip_gameweeks = {}
@@ -511,8 +515,14 @@ def run_optimization(
     # baseline_score, baseline_dict = get_baseline_prediction(num_weeks_ahead, tag)
 
     # Get a dict of what chips we definitely or possibly will play
-    # in each gw
-    chip_gw_dict = construct_chip_dict(gameweeks, chip_gameweeks)
+    # in each gw. Check against the chips this team actually still has, so we can't
+    # build a strategy around a chip that has already been used.
+    available_chips = None if is_replay else get_available_chips(fpl_team_id)
+    if consider_available_chips and available_chips:
+        # consider any remaining chip in any gameweek, unless already asked for
+        chip_gameweeks = {**dict.fromkeys(available_chips, 0), **chip_gameweeks}
+        print(f"Considering available chips: {', '.join(sorted(available_chips))}")
+    chip_gw_dict = construct_chip_dict(gameweeks, chip_gameweeks, available_chips)
 
     # Specific fix (aka hack) for the 2022 World Cup, where everyone
     # gets a free wildcard
@@ -688,7 +698,31 @@ def run_optimization(
     return best_squad, best_strategy
 
 
-def construct_chip_dict(gameweeks: list[int], chip_gameweeks: dict) -> dict:
+def get_available_chips(
+    fpl_team_id: int | None = None, apifetcher: FPLDataFetcher = fetcher
+) -> list[str] | None:
+    """
+    Ask the API which chips this team still has. Returns None if we couldn't find
+    out (not logged in, API down), which callers should treat as "no information"
+    rather than "no chips".
+    """
+    try:
+        return apifetcher.get_available_chips(fpl_team_id)
+    except (requests.exceptions.RequestException, KeyError, TypeError) as e:
+        warnings.warn(
+            f"Couldn't get available chips from the API:\n{e}\nAny chips requested "
+            "on the command line will be considered without checking you still "
+            "have them.",
+            stacklevel=2,
+        )
+        return None
+
+
+def construct_chip_dict(
+    gameweeks: list[int],
+    chip_gameweeks: dict,
+    available_chips: list[str] | None = None,
+) -> dict:
     """
     Given a dict of form {<chip_name>: <chip_gw>,...}
     where <chip_name> is e.g. 'wildcard', and <chip_gw> is -1 if chip
@@ -696,7 +730,29 @@ def construct_chip_dict(gameweeks: list[int], chip_gameweeks: dict) -> dict:
     if it is definitely to be played that gw, return a dict
     { <gw>: {"chip_to_play": [<chip_name>],
              "chips_allowed": [<chip_name>,...]},...}
+
+    If available_chips is given, chips not in that list are dropped, so we can't
+    suggest a strategy built on a chip that has already been used. Pass None to
+    skip the check.
     """
+    if available_chips is not None:
+        unavailable = {
+            chip
+            for chip, gw in chip_gameweeks.items()
+            if int(gw) >= 0 and chip not in available_chips
+        }
+        if unavailable:
+            warnings.warn(
+                f"Ignoring chips that are not available for this team: "
+                f"{', '.join(sorted(unavailable))}",
+                stacklevel=2,
+            )
+            chip_gameweeks = {
+                chip: gw
+                for chip, gw in chip_gameweeks.items()
+                if chip not in unavailable
+            }
+
     chip_dict: dict[int, dict[str, str | None | list[str]]] = {}
     # first fill in any allowed chips
     for gw in gameweeks:
@@ -777,6 +833,14 @@ def main():
         help="play bench_boost in the specified week. Choose 0 for 'any week'.",
         type=int,
         default=-1,
+    )
+    parser.add_argument(
+        "--consider_available_chips",
+        help=(
+            "consider playing any chip this team still has in any gameweek, instead "
+            "of only the chips named above. Requires FPL login."
+        ),
+        action="store_true",
     )
     parser.add_argument(
         "--num_free_transfers", help="how many free transfers do we have", type=int
@@ -887,4 +951,5 @@ def main():
             num_thread,
             profile,
             is_replay=args.is_replay,
+            consider_available_chips=args.consider_available_chips,
         )
