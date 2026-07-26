@@ -73,8 +73,7 @@ def check_absence(player, gameweek, season, dbsession=session):
         select(Absence).where(
             Absence.season == season,
             Absence.player_id == player.player_id,
-            Absence.gw_from < gameweek,
-            Absence.gw_until > gameweek,
+            Absence.covers_gameweek_clause(gameweek),
         )
     ).all()
     # save the reasons and details - there may be more than 1 reason for absence
@@ -217,9 +216,7 @@ def get_player_history_df(
                 for ab in absences_by_player_season.get(
                     (player.player_id, row.fixture.season), []
                 )
-                if ab.gw_until is not None
-                and ab.gw_from < row.fixture.gameweek
-                and ab.gw_until > row.fixture.gameweek
+                if ab.covers_gameweek(row.fixture.gameweek)
             ]
             absence_reason = (
                 [ab.reason for ab in matching_absences] if matching_absences else None
@@ -636,7 +633,9 @@ def make_prediction(
     return pp
 
 
-def fill_ep(csv_filename: str, dbsession: Session = session) -> None:
+def fill_ep(
+    csv_filename: str, season: str = CURRENT_SEASON, dbsession: Session = session
+) -> None:
     """
     Fill the database with FPLs ep_next prediction, and also
     write output to a csv.
@@ -655,12 +654,16 @@ def fill_ep(csv_filename: str, dbsession: Session = session) -> None:
                 continue
             player_id = player.player_id
             outfile.write(f"{player_id},{gameweek},{v['ep_next']}\n")
-            pp = PlayerPrediction()
-            pp.player_id = player_id
-            pp.fixture.gameweek = gameweek
-            pp.predicted_points = v["ep_next"]
-            pp.tag = tag
-            dbsession.add(pp)
+            # A PlayerPrediction is per-fixture, but ep_next is per-gameweek, so
+            # split it evenly over the player's fixtures in the coming gameweek.
+            fixtures = get_fixtures_for_player(
+                player, season, gw_range=[gameweek], dbsession=dbsession
+            )
+            if not fixtures:
+                continue
+            points = float(v["ep_next"]) / len(fixtures)
+            for fixture in fixtures:
+                dbsession.add(make_prediction(player, fixture, points, tag))
     dbsession.commit()
 
 
