@@ -54,6 +54,8 @@ def allocate_predictions(
     season: str,
     tag: str,
     dbsession: Session,
+    min_fixtures_behind: int = 3,
+    use_availability: bool = True,
 ) -> None:
     """
     Take positions off the queue and call function to calculate predictions
@@ -76,6 +78,8 @@ def allocate_predictions(
             gw_range=gw_range,
             tag=tag,
             dbsession=dbsession,
+            min_fixtures_behind=min_fixtures_behind,
+            use_availability=use_availability,
         )
         for p in predictions:
             dbsession.add(p)
@@ -98,6 +102,8 @@ def calc_all_predicted_points(
     | RandomMatchPredictor
     | None = None,
     team_model_args: dict | None = None,
+    min_fixtures_behind: int = 3,
+    use_availability: bool = True,
 ) -> None:
     """
     Do the full prediction for players.
@@ -158,6 +164,8 @@ def calc_all_predicted_points(
                     season,
                     tag,
                     dbsession,
+                    min_fixtures_behind,
+                    use_availability,
                 ),
             )
             processor.daemon = True
@@ -186,6 +194,8 @@ def calc_all_predicted_points(
                 gw_range=gw_range,
                 tag=tag,
                 dbsession=dbsession,
+                min_fixtures_behind=min_fixtures_behind,
+                use_availability=use_availability,
             )
             for pred in predictions:
                 dbsession.add(pred)
@@ -209,6 +219,8 @@ def make_predictedscore_table(
     | None = None,
     team_model_args: dict | None = None,
     dbsession: Session = session,
+    min_fixtures_behind: int = 3,
+    use_availability: bool = True,
 ) -> str:
     if team_model_args is None:
         team_model_args = {"epsilon": DEFAULT_TEAM_EPSILON}
@@ -224,6 +236,8 @@ def make_predictedscore_table(
         include_cards=include_cards,
         include_saves=include_saves,
         include_def_con=include_def_con,
+        min_fixtures_behind=min_fixtures_behind,
+        use_availability=use_availability,
         num_thread=num_thread,
         tag=tag,
         player_model=player_model,
@@ -242,6 +256,24 @@ def main():
     parser.add_argument("--gameweek_start", help="first gameweek to look at", type=int)
     parser.add_argument("--gameweek_end", help="last gameweek to look at", type=int)
     parser.add_argument("--ep_filename", help="csv filename for FPL expected points")
+    parser.add_argument(
+        "--min_fixtures_behind",
+        help=(
+            "how many recent matches to estimate a player's minutes from. More "
+            "matches means a less noisy estimate but staler form - tune with "
+            "airsenal_replay_season rather than by eye."
+        ),
+        type=int,
+        default=3,
+    )
+    parser.add_argument(
+        "--no_availability",
+        help=(
+            "don't scale predicted points by FPL's reported chance of playing; "
+            "instead zero out players at 50%% or below and ignore any other doubt"
+        ),
+        action="store_true",
+    )
     parser.add_argument(
         "--season", help="season, in format e.g. '1819'", default=CURRENT_SEASON
     )
@@ -323,6 +355,8 @@ def main():
             team_model=team_model,
             team_model_args={"epsilon": args.epsilon},
             dbsession=session,
+            min_fixtures_behind=args.min_fixtures_behind,
+            use_availability=not args.no_availability,
         )
 
         # print players with top predicted points
