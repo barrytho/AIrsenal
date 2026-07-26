@@ -61,6 +61,11 @@ np.random.seed(42)
 # consider probabilities of scoring/conceding up to this many goals
 MAX_GOALS = 10
 
+# how much to weight expected goals/assists against actual ones when fitting the
+# player model. 0 reproduces the original actuals-only behaviour; validate any
+# other value with airsenal_replay_season before trusting it.
+DEFAULT_XG_WEIGHT = 0.0
+
 
 def check_absence(player, gameweek, season, dbsession=session):
     """
@@ -691,11 +696,43 @@ def fill_ep(
     dbsession.commit()
 
 
+def blend_with_expected(
+    df: pd.DataFrame, xg_weight: float = DEFAULT_XG_WEIGHT
+) -> pd.DataFrame:
+    """
+    Mix actual goals and assists with FPL's expected goals and assists.
+
+    Over the 10-20 matches the player model is fitted on, actual goal involvements
+    are a noisy measure of a player's underlying scoring rate; xG and xA are less
+    so. xg_weight=0 uses actuals only (the original behaviour), 1 uses xG/xA only.
+
+    Rows with no xG - anything before FPL started publishing it in 2022/23, and the
+    zero-padding rows - keep their actual values.
+    """
+    if not 0 <= xg_weight <= 1:
+        msg = f"xg_weight must be between 0 and 1, got {xg_weight}"
+        raise ValueError(msg)
+    if xg_weight == 0:
+        return df
+
+    df = df.copy()
+    columns = [("goals", "expected_goals"), ("assists", "expected_assists")]
+    for actual, expected in columns:
+        if expected not in df.columns:
+            continue
+        xg = pd.to_numeric(df[expected], errors="coerce")
+        blended = (1 - xg_weight) * df[actual] + xg_weight * xg
+        # where there is no xG for this match, fall back to what actually happened
+        df[actual] = blended.where(xg.notna(), df[actual])
+    return df
+
+
 def process_player_data(
     prefix: str,
     season: str = CURRENT_SEASON,
     gameweek: int = NEXT_GAMEWEEK,
     dbsession: Session = session,
+    xg_weight: float = DEFAULT_XG_WEIGHT,
 ) -> dict:
     """
     Transform the player dataframe, basically giving a list (for each player)
@@ -705,6 +742,7 @@ def process_player_data(
     df = get_player_history_df(
         prefix, season=season, gameweek=gameweek, dbsession=dbsession
     )
+    df = blend_with_expected(df, xg_weight)
     df["neither"] = df["team_goals"] - df["goals"] - df["assists"]
     df.loc[(df["neither"] < 0), ["neither", "team_goals", "goals", "assists"]] = [
         0.0,
@@ -758,7 +796,11 @@ def process_player_data(
         "nplayer": nplayer,
         "nmatch": nmatch,
         "minutes": minutes.astype("int64"),
-        "y": y.astype("int64"),
+        # blended goal involvements are fractional, and casting them to int would
+        # floor every xG below 1 to zero. ConjugatePlayerModel sums them into
+        # Dirichlet parameters and doesn't need counts; NumpyroPlayerModel does,
+        # which fit_player_data checks for.
+        "y": y.astype("int64") if xg_weight == 0 else y.astype("float64"),
         "alpha": alpha,
         "time_diff": time_diff,
     }
@@ -772,13 +814,21 @@ def fit_player_data(
     dbsession: Session = session,
     epsilon=DEFAULT_PLAYER_EPSILON,
     n_goals_prior=DEFAULT_N_GOALS_PRIOR,
+    xg_weight: float = DEFAULT_XG_WEIGHT,
 ) -> pd.DataFrame:
     """
     Fit the data for a particular position (FWD, MID, DEF).
     """
     if model is None:
         model = ConjugatePlayerModel()
-    data = process_player_data(position, season, gameweek, dbsession)
+    if xg_weight > 0 and isinstance(model, NumpyroPlayerModel):
+        msg = (
+            "xg_weight > 0 gives fractional goal involvements, which "
+            "NumpyroPlayerModel cannot use - its likelihood is multinomial over "
+            "counts. Use ConjugatePlayerModel, or set xg_weight=0."
+        )
+        raise ValueError(msg)
+    data = process_player_data(position, season, gameweek, dbsession, xg_weight)
     print("Fitting player model for", position, "...")
     model = fastcopy(model)
     fitted_model = model.fit(data, epsilon=epsilon, n_goals_prior=n_goals_prior)
@@ -799,6 +849,7 @@ def get_all_fitted_player_data(
     dbsession: Session = session,
     epsilon=DEFAULT_PLAYER_EPSILON,
     n_goals_prior=DEFAULT_N_GOALS_PRIOR,
+    xg_weight: float = DEFAULT_XG_WEIGHT,
 ) -> dict[str, pd.DataFrame]:
     return {
         pos: fit_player_data(
@@ -809,6 +860,7 @@ def get_all_fitted_player_data(
             dbsession,
             epsilon=epsilon,
             n_goals_prior=n_goals_prior,
+            xg_weight=xg_weight,
         )
         for pos in ["GK", "DEF", "MID", "FWD"]
     }

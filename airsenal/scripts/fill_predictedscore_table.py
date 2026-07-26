@@ -22,6 +22,7 @@ from airsenal.framework.bpl_interface import (
 from airsenal.framework.multiprocessing_utils import set_multiprocessing_start_method
 from airsenal.framework.player_model import ConjugatePlayerModel, NumpyroPlayerModel
 from airsenal.framework.prediction_utils import (
+    DEFAULT_XG_WEIGHT,
     MAX_GOALS,
     calc_predicted_points_for_player,
     fit_bonus_points,
@@ -104,6 +105,7 @@ def calc_all_predicted_points(
     team_model_args: dict | None = None,
     min_fixtures_behind: int = 3,
     use_availability: bool = True,
+    xg_weight: float = DEFAULT_XG_WEIGHT,
 ) -> None:
     """
     Do the full prediction for players.
@@ -124,7 +126,11 @@ def calc_all_predicted_points(
     )
 
     df_player = get_all_fitted_player_data(
-        season, gw_range[0], model=player_model, dbsession=dbsession
+        season,
+        gw_range[0],
+        model=player_model,
+        dbsession=dbsession,
+        xg_weight=xg_weight,
     )
 
     if include_bonus:
@@ -221,6 +227,7 @@ def make_predictedscore_table(
     dbsession: Session = session,
     min_fixtures_behind: int = 3,
     use_availability: bool = True,
+    xg_weight: float = DEFAULT_XG_WEIGHT,
 ) -> str:
     if team_model_args is None:
         team_model_args = {"epsilon": DEFAULT_TEAM_EPSILON}
@@ -243,6 +250,7 @@ def make_predictedscore_table(
         player_model=player_model,
         team_model=team_model,
         team_model_args=team_model_args,
+        xg_weight=xg_weight,
     )
     return tag
 
@@ -273,6 +281,16 @@ def main():
             "instead zero out players at 50%% or below and ignore any other doubt"
         ),
         action="store_true",
+    )
+    parser.add_argument(
+        "--xg_weight",
+        help=(
+            "how much to weight expected goals/assists against actual ones when "
+            "fitting the player model (0 to 1). 0 uses actuals only. Validate any "
+            "other value with airsenal_replay_season first."
+        ),
+        type=float,
+        default=DEFAULT_XG_WEIGHT,
     )
     parser.add_argument(
         "--season", help="season, in format e.g. '1819'", default=CURRENT_SEASON
@@ -357,6 +375,7 @@ def main():
             dbsession=session,
             min_fixtures_behind=args.min_fixtures_behind,
             use_availability=not args.no_availability,
+            xg_weight=args.xg_weight,
         )
 
         # print players with top predicted points
