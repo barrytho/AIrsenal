@@ -10,6 +10,7 @@ from tqdm import TqdmWarning
 
 from airsenal.framework.bpl_interface import DEFAULT_TEAM_EPSILON
 from airsenal.framework.multiprocessing_utils import set_multiprocessing_start_method
+from airsenal.framework.optimization_utils import DEFAULT_DISCOUNT
 from airsenal.framework.random_team_model import RandomMatchPredictor
 from airsenal.framework.schema import session_scope
 from airsenal.framework.utils import (
@@ -157,6 +158,24 @@ from airsenal.scripts.update_db import update_db
     is_flag=True,
 )
 @click.option(
+    "--min_hit_gain",
+    help=(
+        "How many points a strategy taking a hit must gain over the best strategy "
+        "that doesn't before it is preferred (defaults to 0, i.e. no check)."
+    ),
+    type=float,
+    default=0.0,
+)
+@click.option(
+    "--discount",
+    help=(
+        "How much less a point in a later gameweek is worth (per gameweek). "
+        "1.0 weights the whole window equally, lower favours the short term."
+    ),
+    type=float,
+    default=DEFAULT_DISCOUNT,
+)
+@click.option(
     "--save_absences",
     help="If set, save expected absences to 'absences_yyyy.csv' file",
     is_flag=True,
@@ -181,6 +200,8 @@ def run_pipeline(
     consider_available_chips: bool,
     seed: int | None,
     check_data: bool,
+    min_hit_gain: float,
+    discount: float,
     save_absences: bool,
 ) -> None:
     """
@@ -286,6 +307,8 @@ def run_pipeline(
                 allow_unused=allow_unused,
                 consider_available_chips=consider_available_chips,
                 random_state=seed,
+                min_hit_gain=min_hit_gain,
+                discount=discount,
             )
             if not opt_ok:
                 msg = "Problem running optimization"
@@ -412,6 +435,8 @@ def run_optimize_squad(
     allow_unused: bool,
     consider_available_chips: bool = False,
     random_state: int | None = None,
+    min_hit_gain: float = 0.0,
+    discount: float = DEFAULT_DISCOUNT,
 ) -> bool:
     """
     Build the initial squad
@@ -432,6 +457,8 @@ def run_optimize_squad(
             allow_unused_transfers=allow_unused,
             consider_available_chips=consider_available_chips,
             random_state=random_state,
+            min_hit_gain=min_hit_gain,
+            discount=discount,
         )
     return True
 

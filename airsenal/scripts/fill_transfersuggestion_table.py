@@ -40,8 +40,12 @@ from airsenal.framework.multiprocessing_utils import (
     CustomQueue,
     set_multiprocessing_start_method,
 )
-from airsenal.framework.optimization_transfers import make_best_transfers
+from airsenal.framework.optimization_transfers import (
+    NUM_TRANSFER_CANDIDATES,
+    make_best_transfers,
+)
 from airsenal.framework.optimization_utils import (
+    DEFAULT_DISCOUNT,
     MAX_FREE_TRANSFERS,
     check_tag_valid,
     count_expected_outputs,
@@ -101,6 +105,8 @@ def optimize(
     max_free_transfers: int = MAX_FREE_TRANSFERS,
     abort: EventType | None = None,
     random_state: int | None = None,
+    discount: float = DEFAULT_DISCOUNT,
+    num_candidates: int = NUM_TRANSFER_CANDIDATES,
 ) -> None:
     """
     Queue is the multiprocessing queue,
@@ -142,6 +148,8 @@ def optimize(
             max_free_transfers,
             abort,
             random_state,
+            discount,
+            num_candidates,
         )
     except Exception:
         if abort is not None:
@@ -210,6 +218,8 @@ def _optimize(
     max_free_transfers: int = MAX_FREE_TRANSFERS,
     abort: EventType | None = None,
     random_state: int | None = None,
+    discount: float = DEFAULT_DISCOUNT,
+    num_candidates: int = NUM_TRANSFER_CANDIDATES,
 ) -> None:
     """The body of optimize(), see there for details."""
     if random_state is not None:
@@ -320,9 +330,11 @@ def _optimize(
                 num_iterations,
                 (updater, increment, pid) if updater is not None else None,
                 random_state=random_state,
+                num_candidates=num_candidates,
+                discount=discount,
             )
 
-            discount_factor = get_discount_factor(root_gw, gw)
+            discount_factor = get_discount_factor(root_gw, gw, discount=discount)
             points -= hit_this_gw * discount_factor
             strat_dict["total_score"] += points
             strat_dict["points_per_gw"][gw] = points
@@ -374,14 +386,28 @@ def _optimize(
                 )
 
 
-def find_best_strat_from_json(tag: str) -> dict | None:
+def takes_a_hit(strat: dict) -> bool:
+    """Whether a strategy spends points on extra transfers."""
+    return any(hit > 0 for hit in strat.get("points_hit", {}).values())
+
+
+def find_best_strat_from_json(tag: str, min_hit_gain: float = 0.0) -> dict | None:
     """
     Look through all the files in our tmp directory that
     contain the prediction tag in their filename.
     Load the json, and find the strategy with the best 'total_score'.
+
+    min_hit_gain is how far ahead a strategy that takes a points hit must be
+    before it is preferred to the best strategy that doesn't. Predicted points
+    carry several points of uncertainty, so a hit that wins by a fraction of a
+    point is not evidence it is actually better; requiring a margin avoids paying
+    4 points to chase noise. The scores here are already net of the hit.
     """
     best_score = 0
     best_strat = None
+    best_no_hit_score = 0
+    best_no_hit_strat = None
+
     file_list = os.listdir(OUTPUT_DIR)
     for filename in file_list:
         if f"strategy_{tag}_" not in filename:
@@ -392,6 +418,23 @@ def find_best_strat_from_json(tag: str) -> dict | None:
             if strat["total_score"] > best_score:
                 best_score = strat["total_score"]
                 best_strat = strat
+            if not takes_a_hit(strat) and strat["total_score"] > best_no_hit_score:
+                best_no_hit_score = strat["total_score"]
+                best_no_hit_strat = strat
+
+    if (
+        min_hit_gain > 0
+        and best_strat is not None
+        and takes_a_hit(best_strat)
+        and best_no_hit_strat is not None
+        and best_score - best_no_hit_score < min_hit_gain
+    ):
+        print(
+            f"Best strategy takes a hit but only gains "
+            f"{best_score - best_no_hit_score:.2f}pts over the best strategy that "
+            f"doesn't (threshold {min_hit_gain:.2f}). Using the latter."
+        )
+        return best_no_hit_strat
 
     return best_strat
 
@@ -541,6 +584,9 @@ def run_optimization(
     max_free_transfers: int = MAX_FREE_TRANSFERS,
     consider_available_chips: bool = False,
     random_state: int | None = None,
+    min_hit_gain: float = 0.0,
+    discount: float = DEFAULT_DISCOUNT,
+    num_candidates: int = NUM_TRANSFER_CANDIDATES,
 ) -> tuple[Squad, dict[str, dict[str, int | list[int]]] | None]:
     """
     This is the actual main function that sets up the multiprocessing
@@ -723,6 +769,8 @@ def run_optimization(
                 max_free_transfers,
                 abort,
                 random_state,
+                discount,
+                num_candidates,
             ),
         )
         processor.daemon = True
@@ -738,7 +786,7 @@ def run_optimization(
     wait_for_processes(procs, abort, num_expected_outputs)
 
     # find the best from all the strategies tried
-    best_strategy = find_best_strat_from_json(tag)
+    best_strategy = find_best_strat_from_json(tag, min_hit_gain=min_hit_gain)
 
     baseline_score = find_baseline_score_from_json(tag, num_weeks)
     fill_suggestion_table(baseline_score, best_strategy, season, fpl_team_id)
@@ -967,6 +1015,35 @@ def main():
         default=None,
     )
     parser.add_argument(
+        "--min_hit_gain",
+        help=(
+            "how many points a strategy taking a hit must gain over the best "
+            "strategy that doesn't before it is preferred. Predictions carry "
+            "several points of uncertainty, so a hit winning by a fraction of a "
+            "point is not evidence it is better. 0 disables the check."
+        ),
+        type=float,
+        default=0.0,
+    )
+    parser.add_argument(
+        "--discount",
+        help=(
+            "how much less a point in a later gameweek is worth (per gameweek). "
+            "1.0 weights the whole window equally, lower favours the short term."
+        ),
+        type=float,
+        default=DEFAULT_DISCOUNT,
+    )
+    parser.add_argument(
+        "--num_candidates",
+        help=(
+            "how many affordable replacements to score for each player considered "
+            "for sale. 1 takes the first player we can afford, as before."
+        ),
+        type=int,
+        default=NUM_TRANSFER_CANDIDATES,
+    )
+    parser.add_argument(
         "--num_free_transfers", help="how many free transfers do we have", type=int
     )
     parser.add_argument(
@@ -1077,4 +1154,7 @@ def main():
             is_replay=args.is_replay,
             consider_available_chips=args.consider_available_chips,
             random_state=args.seed,
+            min_hit_gain=args.min_hit_gain,
+            discount=args.discount,
+            num_candidates=args.num_candidates,
         )

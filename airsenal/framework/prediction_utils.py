@@ -66,6 +66,10 @@ MAX_GOALS = 10
 # other value with airsenal_replay_season before trusting it.
 DEFAULT_XG_WEIGHT = 0.0
 
+# roughly the goals a Premier League team scores in an average match, used to judge
+# how favourable a fixture is when conditioning bonus points on it
+AVERAGE_TEAM_GOALS = 1.4
+
 
 def check_absence(player, gameweek, season, dbsession=session):
     """
@@ -357,8 +361,37 @@ def get_defending_points(
     return defending_points
 
 
+def expected_goals_from_probs(score_prob: dict[int, float]) -> float:
+    """Expected number of goals from a {n_goals: probability} mapping."""
+    return sum(n * p for n, p in score_prob.items())
+
+
+def bonus_fixture_factor(
+    team_score_prob: dict[int, float],
+    average_team_goals: float = AVERAGE_TEAM_GOALS,
+    limits: tuple[float, float] = (0.5, 1.5),
+) -> float:
+    """
+    How much better or worse than usual this fixture is for earning bonus points.
+
+    Bonus is awarded on BPS, which is driven mostly by goals, assists and clean
+    sheets - all of which depend on the fixture. A player's average bonus is
+    measured across the fixtures they have already played, so scaling it by how
+    much this team is expected to score relative to a typical team makes an easy
+    fixture worth more than a hard one. Clipped, because this is a rough proxy and
+    should not swing the estimate wildly.
+    """
+    if average_team_goals <= 0:
+        return 1.0
+    factor = expected_goals_from_probs(team_score_prob) / average_team_goals
+    return max(limits[0], min(limits[1], factor))
+
+
 def get_bonus_points(
-    player_id: int, minutes: int | float, df_bonus: tuple[pd.Series, pd.Series]
+    player_id: int,
+    minutes: int | float,
+    df_bonus: tuple[pd.Series, pd.Series],
+    fixture_factor: float = 1.0,
 ) -> float:
     """
     Returns expected bonus points scored by player_id when playing minutes minutes.
@@ -367,18 +400,21 @@ def get_bonus_points(
     60 minutes in 1st index, and when playing between 30 and 60 minutes in 2nd index
     (as calculated by fit_bonus_points()).
 
+    fixture_factor scales the player's average by how favourable this particular
+    fixture is (see bonus_fixture_factor); 1.0 leaves the average unconditioned.
+
     NOTE: Minutes values are currently hardcoded - this function and fit_bonus_points
     must be changed together.
     """
     if minutes >= 60 and player_id in df_bonus[0].index:
-        return df_bonus[0].loc[player_id]
+        return df_bonus[0].loc[player_id] * fixture_factor
     if (
         minutes >= 60
         or (minutes >= 30 and player_id not in df_bonus[1].index)
         or minutes < 30
     ):
         return 0
-    return df_bonus[1].loc[player_id]
+    return df_bonus[1].loc[player_id] * fixture_factor
 
 
 def get_def_con_points(
@@ -449,6 +485,7 @@ def calc_predicted_points_for_player(
     tag: str = "",
     dbsession: Session = session,
     use_availability: bool = True,
+    condition_bonus_on_fixture: bool = False,
 ) -> list[PlayerPrediction]:
     """
     Use the team-level model to get the probs of scoring or conceding
@@ -548,6 +585,9 @@ def calc_predicted_points_for_player(
                 not player.is_injured_or_suspended(season, gw_range[0], gameweek)
             )
         )
+        bonus_factor = (
+            bonus_fixture_factor(team_score_prob) if condition_bonus_on_fixture else 1.0
+        )
 
         if sum(recent_minutes) == 0:
             # 'recent_minutes' contains the number of minutes that player played for
@@ -582,7 +622,9 @@ def calc_predicted_points_for_player(
                     + get_defending_points(position, mins, team_concede_prob)
                 )
                 if df_bonus is not None:
-                    points += get_bonus_points(player.player_id, mins, df_bonus)
+                    points += get_bonus_points(
+                        player.player_id, mins, df_bonus, bonus_factor
+                    )
                 if df_cards is not None:
                     points += get_card_points(player.player_id, mins, df_cards)
                 if df_saves is not None:
@@ -621,6 +663,7 @@ def calc_predicted_points_for_pos(
     model: NumpyroPlayerModel | ConjugatePlayerModel | None = None,
     dbsession: Session = session,
     use_availability: bool = True,
+    condition_bonus_on_fixture: bool = False,
 ) -> dict[int, list[PlayerPrediction]]:
     """
     Calculate points predictions for all players in a given position and
@@ -641,6 +684,7 @@ def calc_predicted_points_for_pos(
             tag=tag,
             dbsession=dbsession,
             use_availability=use_availability,
+            condition_bonus_on_fixture=condition_bonus_on_fixture,
         )
         for player in list_players(
             position=pos, season=season, gameweek=min(gw_range), dbsession=dbsession

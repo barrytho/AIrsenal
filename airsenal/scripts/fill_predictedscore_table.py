@@ -57,6 +57,7 @@ def allocate_predictions(
     dbsession: Session,
     min_fixtures_behind: int = 3,
     use_availability: bool = True,
+    condition_bonus_on_fixture: bool = False,
 ) -> None:
     """
     Take positions off the queue and call function to calculate predictions
@@ -81,6 +82,7 @@ def allocate_predictions(
             dbsession=dbsession,
             min_fixtures_behind=min_fixtures_behind,
             use_availability=use_availability,
+            condition_bonus_on_fixture=condition_bonus_on_fixture,
         )
         for p in predictions:
             dbsession.add(p)
@@ -106,6 +108,7 @@ def calc_all_predicted_points(
     min_fixtures_behind: int = 3,
     use_availability: bool = True,
     xg_weight: float = DEFAULT_XG_WEIGHT,
+    condition_bonus_on_fixture: bool = False,
 ) -> None:
     """
     Do the full prediction for players.
@@ -172,6 +175,7 @@ def calc_all_predicted_points(
                     dbsession,
                     min_fixtures_behind,
                     use_availability,
+                    condition_bonus_on_fixture,
                 ),
             )
             processor.daemon = True
@@ -202,6 +206,7 @@ def calc_all_predicted_points(
                 dbsession=dbsession,
                 min_fixtures_behind=min_fixtures_behind,
                 use_availability=use_availability,
+                condition_bonus_on_fixture=condition_bonus_on_fixture,
             )
             for pred in predictions:
                 dbsession.add(pred)
@@ -228,6 +233,7 @@ def make_predictedscore_table(
     min_fixtures_behind: int = 3,
     use_availability: bool = True,
     xg_weight: float = DEFAULT_XG_WEIGHT,
+    condition_bonus_on_fixture: bool = False,
 ) -> str:
     if team_model_args is None:
         team_model_args = {"epsilon": DEFAULT_TEAM_EPSILON}
@@ -251,6 +257,7 @@ def make_predictedscore_table(
         team_model=team_model,
         team_model_args=team_model_args,
         xg_weight=xg_weight,
+        condition_bonus_on_fixture=condition_bonus_on_fixture,
     )
     return tag
 
@@ -279,6 +286,14 @@ def main():
         help=(
             "don't scale predicted points by FPL's reported chance of playing; "
             "instead zero out players at 50%% or below and ignore any other doubt"
+        ),
+        action="store_true",
+    )
+    parser.add_argument(
+        "--condition_bonus_on_fixture",
+        help=(
+            "scale each player's average bonus points by how favourable the fixture "
+            "is, instead of using a flat per-player average"
         ),
         action="store_true",
     )
@@ -376,6 +391,7 @@ def main():
             min_fixtures_behind=args.min_fixtures_behind,
             use_availability=not args.no_availability,
             xg_weight=args.xg_weight,
+            condition_bonus_on_fixture=args.condition_bonus_on_fixture,
         )
 
         # print players with top predicted points
