@@ -1656,8 +1656,7 @@ def was_historic_absence(
         .where(
             Absence.season == season,
             Absence.player_id == player.player_id,
-            Absence.gw_from < gameweek,
-            Absence.gw_until > gameweek,
+            Absence.covers_gameweek_clause(gameweek),
         )
         .limit(1)
     ).first()

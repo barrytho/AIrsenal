@@ -11,7 +11,9 @@ from sqlalchemy import (
     Index,
     String,
     UniqueConstraint,
+    and_,
     create_engine,
+    or_,
     select,
 )
 from sqlalchemy.orm import (
@@ -253,6 +255,25 @@ class Absence(Base):
     gw_until: Mapped[int | None]
     url: Mapped[str100_optional]
     timestamp: Mapped[str100]
+
+    def covers_gameweek(self, gameweek: int) -> bool:
+        """Whether this absence means the player was unavailable in gameweek.
+
+        gw_from is the first gameweek missed and gw_until the gameweek the player
+        returns, so the absence covers gw_from <= gameweek < gw_until. A null
+        gw_until means the return date was unknown, i.e. absent from gw_from on.
+        """
+        if self.gw_from > gameweek:
+            return False
+        return self.gw_until is None or self.gw_until > gameweek
+
+    @classmethod
+    def covers_gameweek_clause(cls, gameweek: int):
+        """SQL equivalent of covers_gameweek, for use in a WHERE clause."""
+        return and_(
+            cls.gw_from <= gameweek,
+            or_(cls.gw_until.is_(None), cls.gw_until > gameweek),
+        )
 
     def __repr__(self):
         return (
