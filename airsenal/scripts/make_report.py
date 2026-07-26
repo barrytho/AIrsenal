@@ -23,18 +23,10 @@ from airsenal.framework.utils import (
     get_player_name,
     get_predicted_points,
 )
+from airsenal.scripts.fill_transfersuggestion_table import get_available_chips
 from airsenal.scripts.get_transfer_suggestions import get_transfer_suggestions
 
 POSITION_ORDER = ["GK", "DEF", "MID", "FWD"]
-
-
-def available_chips(fpl_team_id: int) -> list[str] | None:
-    """Chips this team still has, or None if we couldn't find out (the API needs a
-    login, and we don't want a missing one to break the report)."""
-    try:
-        return fetcher.get_available_chips(fpl_team_id)
-    except Exception:
-        return None
 
 
 def format_price(price: int | None) -> str:
@@ -179,7 +171,7 @@ def status_section(fpl_team_id: int, gameweek: int, season: str) -> list[str]:
     except Exception as e:
         lines.append(f"- In the bank: unknown ({e})")
 
-    chips = available_chips(fpl_team_id)
+    chips = get_available_chips(fpl_team_id)
     if chips is None:
         lines.append("- Chips remaining: unknown (not logged in to the FPL API)")
     else:

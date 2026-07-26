@@ -31,6 +31,7 @@ from multiprocessing.synchronize import Event as EventType
 import numpy as np
 import regex as re
 import requests
+from curl_cffi import requests as curl_requests
 from prettytable import PrettyTable
 from tqdm import TqdmWarning, tqdm
 
@@ -871,7 +872,9 @@ def get_available_chips(
     """
     try:
         return apifetcher.get_available_chips(fpl_team_id)
-    except (requests.exceptions.RequestException, KeyError, TypeError) as e:
+    # the fetcher uses curl_cffi, whose exceptions are unrelated to those of the
+    # `requests` package used for the Discord webhook above
+    except (curl_requests.exceptions.RequestException, KeyError, TypeError) as e:
         warnings.warn(
             f"Couldn't get available chips from the API:\n{e}\nAny chips requested "
             "on the command line will be considered without checking you still "
