@@ -134,6 +134,14 @@ from airsenal.scripts.update_db import update_db
     is_flag=True,
 )
 @click.option(
+    "--consider_available_chips",
+    help=(
+        "If set, consider playing any chip this team still has in any gameweek, "
+        "rather than only the chips named by the options above. Requires FPL login."
+    ),
+    is_flag=True,
+)
+@click.option(
     "--save_absences",
     help="If set, save expected absences to 'absences_yyyy.csv' file",
     is_flag=True,
@@ -155,6 +163,7 @@ def run_pipeline(
     max_transfers: int,
     max_hit: int,
     allow_unused: bool,
+    consider_available_chips: bool,
     save_absences: bool,
 ) -> None:
     """
@@ -247,6 +256,7 @@ def run_pipeline(
                 max_transfers=max_transfers,
                 max_hit=max_hit,
                 allow_unused=allow_unused,
+                consider_available_chips=consider_available_chips,
             )
             if not opt_ok:
                 msg = "Problem running optimization"
@@ -371,6 +381,7 @@ def run_optimize_squad(
     max_transfers: int,
     max_hit: int,
     allow_unused: bool,
+    consider_available_chips: bool = False,
 ) -> bool:
     """
     Build the initial squad
@@ -389,6 +400,7 @@ def run_optimize_squad(
             max_opt_transfers=max_transfers,
             max_total_hit=max_hit,
             allow_unused_transfers=allow_unused,
+            consider_available_chips=consider_available_chips,
         )
     return True
 

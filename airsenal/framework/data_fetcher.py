@@ -44,6 +44,15 @@ LOGIN_URLS = {
 CLIENT_ID = "bfcbaf69-aade-4c1b-8f00-c1cb8a193030"
 STANDARD_CONNECTION_ID = "867ed4363b2bc21c860085ad2baa817d"
 
+# the API's chip names to the ones used throughout AIrsenal. Chips AIrsenal cannot
+# optimise for (e.g. "manager") are deliberately absent and get filtered out.
+API_CHIP_NAMES = {
+    "wildcard": "wildcard",
+    "freehit": "free_hit",
+    "bboost": "bench_boost",
+    "3xc": "triple_captain",
+}
+
 
 def generate_code_verifier():
     return secrets.token_urlsafe(64)[:128]
@@ -391,14 +400,16 @@ class FPLDataFetcher:
 
     def get_available_chips(self, fpl_team_id=None):
         """
-        Returns a list of chips that are available to be played in upcoming gameweek.
+        Returns a list of chips that are available to be played in upcoming gameweek,
+        using AIrsenal's chip names rather than the API's.
         Requires login
         """
         squad_data = self.get_current_squad_data(fpl_team_id)
         return [
-            chip["name"]
+            API_CHIP_NAMES[chip["name"]]
             for chip in squad_data["chips"]
             if chip["status_for_entry"] == "available"
+            and chip["name"] in API_CHIP_NAMES
         ]
 
     def get_current_summary_data(self):

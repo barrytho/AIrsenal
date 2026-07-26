@@ -21,6 +21,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.session import Session
 
 from airsenal.framework.data_fetcher import FPLDataFetcher
+from airsenal.framework.FPL_scoring_rules import MAX_FREE_TRANSFERS
 from airsenal.framework.random_team_model import RandomMatchPredictor
 from airsenal.framework.schema import (
     Absence,
@@ -439,10 +440,14 @@ def get_free_transfers(
                 for gw in data["current"]:
                     if gw["event"] <= starting_gw:
                         continue
-                    if gw["event_transfers"] == 0 and num_free_transfers < 2:
-                        num_free_transfers += 1
-                    elif gw["event_transfers"] >= 2:
-                        num_free_transfers = 1
+                    # one free transfer earned per gameweek, capped, minus those used
+                    num_free_transfers = max(
+                        1,
+                        min(
+                            MAX_FREE_TRANSFERS,
+                            num_free_transfers + 1 - gw["event_transfers"],
+                        ),
+                    )
                     # if gameweek was specified, and we reached the previous one,
                     # break out of loop.
                     if gameweek and gw["event"] == gameweek - 1:
@@ -475,10 +480,14 @@ def get_free_transfers(
         raise ValueError(msg)
     gameweek = gameweek or NEXT_GAMEWEEK
     for prev_gw in range(starting_gw + 1, gameweek):
-        if prev_gw not in gw_transactions:
-            num_free_transfers = 2
-        elif gw_transactions[prev_gw] >= 2:
-            num_free_transfers = 1
+        # one free transfer earned per gameweek, capped, minus those used
+        num_free_transfers = max(
+            1,
+            min(
+                MAX_FREE_TRANSFERS,
+                num_free_transfers + 1 - gw_transactions.get(prev_gw, 0),
+            ),
+        )
 
     return num_free_transfers
 
