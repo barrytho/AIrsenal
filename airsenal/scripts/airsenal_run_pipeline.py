@@ -10,6 +10,7 @@ from tqdm import TqdmWarning
 
 from airsenal.framework.bpl_interface import DEFAULT_TEAM_EPSILON
 from airsenal.framework.multiprocessing_utils import set_multiprocessing_start_method
+from airsenal.framework.optimization_utils import DEFAULT_DISCOUNT
 from airsenal.framework.random_team_model import RandomMatchPredictor
 from airsenal.framework.schema import session_scope
 from airsenal.framework.utils import (
@@ -134,6 +135,24 @@ from airsenal.scripts.update_db import update_db
     is_flag=True,
 )
 @click.option(
+    "--min_hit_gain",
+    help=(
+        "How many points a strategy taking a hit must gain over the best strategy "
+        "that doesn't before it is preferred (defaults to 0, i.e. no check)."
+    ),
+    type=float,
+    default=0.0,
+)
+@click.option(
+    "--discount",
+    help=(
+        "How much less a point in a later gameweek is worth (per gameweek). "
+        "1.0 weights the whole window equally, lower favours the short term."
+    ),
+    type=float,
+    default=DEFAULT_DISCOUNT,
+)
+@click.option(
     "--save_absences",
     help="If set, save expected absences to 'absences_yyyy.csv' file",
     is_flag=True,
@@ -155,6 +174,8 @@ def run_pipeline(
     max_transfers: int,
     max_hit: int,
     allow_unused: bool,
+    min_hit_gain: float,
+    discount: float,
     save_absences: bool,
 ) -> None:
     """
@@ -247,6 +268,8 @@ def run_pipeline(
                 max_transfers=max_transfers,
                 max_hit=max_hit,
                 allow_unused=allow_unused,
+                min_hit_gain=min_hit_gain,
+                discount=discount,
             )
             if not opt_ok:
                 msg = "Problem running optimization"
@@ -371,6 +394,8 @@ def run_optimize_squad(
     max_transfers: int,
     max_hit: int,
     allow_unused: bool,
+    min_hit_gain: float = 0.0,
+    discount: float = DEFAULT_DISCOUNT,
 ) -> bool:
     """
     Build the initial squad
@@ -389,6 +414,8 @@ def run_optimize_squad(
             max_opt_transfers=max_transfers,
             max_total_hit=max_hit,
             allow_unused_transfers=allow_unused,
+            min_hit_gain=min_hit_gain,
+            discount=discount,
         )
     return True
 

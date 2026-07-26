@@ -54,6 +54,7 @@ def allocate_predictions(
     season: str,
     tag: str,
     dbsession: Session,
+    condition_bonus_on_fixture: bool = False,
 ) -> None:
     """
     Take positions off the queue and call function to calculate predictions
@@ -76,6 +77,7 @@ def allocate_predictions(
             gw_range=gw_range,
             tag=tag,
             dbsession=dbsession,
+            condition_bonus_on_fixture=condition_bonus_on_fixture,
         )
         for p in predictions:
             dbsession.add(p)
@@ -98,6 +100,7 @@ def calc_all_predicted_points(
     | RandomMatchPredictor
     | None = None,
     team_model_args: dict | None = None,
+    condition_bonus_on_fixture: bool = False,
 ) -> None:
     """
     Do the full prediction for players.
@@ -158,6 +161,7 @@ def calc_all_predicted_points(
                     season,
                     tag,
                     dbsession,
+                    condition_bonus_on_fixture,
                 ),
             )
             processor.daemon = True
@@ -186,6 +190,7 @@ def calc_all_predicted_points(
                 gw_range=gw_range,
                 tag=tag,
                 dbsession=dbsession,
+                condition_bonus_on_fixture=condition_bonus_on_fixture,
             )
             for pred in predictions:
                 dbsession.add(pred)
@@ -209,6 +214,7 @@ def make_predictedscore_table(
     | None = None,
     team_model_args: dict | None = None,
     dbsession: Session = session,
+    condition_bonus_on_fixture: bool = False,
 ) -> str:
     if team_model_args is None:
         team_model_args = {"epsilon": DEFAULT_TEAM_EPSILON}
@@ -229,6 +235,7 @@ def make_predictedscore_table(
         player_model=player_model,
         team_model=team_model,
         team_model_args=team_model_args,
+        condition_bonus_on_fixture=condition_bonus_on_fixture,
     )
     return tag
 
@@ -242,6 +249,14 @@ def main():
     parser.add_argument("--gameweek_start", help="first gameweek to look at", type=int)
     parser.add_argument("--gameweek_end", help="last gameweek to look at", type=int)
     parser.add_argument("--ep_filename", help="csv filename for FPL expected points")
+    parser.add_argument(
+        "--condition_bonus_on_fixture",
+        help=(
+            "scale each player's average bonus points by how favourable the fixture "
+            "is, instead of using a flat per-player average"
+        ),
+        action="store_true",
+    )
     parser.add_argument(
         "--season", help="season, in format e.g. '1819'", default=CURRENT_SEASON
     )
@@ -323,6 +338,7 @@ def main():
             team_model=team_model,
             team_model_args={"epsilon": args.epsilon},
             dbsession=session,
+            condition_bonus_on_fixture=args.condition_bonus_on_fixture,
         )
 
         # print players with top predicted points
