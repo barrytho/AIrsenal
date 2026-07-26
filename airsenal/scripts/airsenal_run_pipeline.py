@@ -28,6 +28,7 @@ from airsenal.scripts.fill_predictedscore_table import (
     make_predictedscore_table,
 )
 from airsenal.scripts.fill_transfersuggestion_table import run_optimization
+from airsenal.scripts.make_report import make_report
 from airsenal.scripts.make_transfers import make_transfers
 from airsenal.scripts.save_expected_absences import main as save_expected_absences
 from airsenal.scripts.set_lineup import set_lineup
@@ -267,6 +268,20 @@ def run_pipeline(
         if save_absences:
             click.echo("Saving absences to csv...")
             save_expected_absences()
+
+        # everything above scrolls past during a run, so finish with a summary
+        try:
+            click.echo("")
+            click.echo(
+                make_report(
+                    fpl_team_id=fpl_team_id,
+                    gameweek=gw_range[0],
+                    dbsession=dbsession,
+                )
+            )
+        except Exception as e:  # a report problem must not fail the whole run
+            warnings.warn(f"Couldn't generate the summary report: {e}", stacklevel=2)
+
         click.echo("Pipeline finished OK!")
 
 
