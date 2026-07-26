@@ -443,11 +443,16 @@ def calc_predicted_points_for_player(
     min_fixtures_behind: int = 3,
     tag: str = "",
     dbsession: Session = session,
+    use_availability: bool = True,
 ) -> list[PlayerPrediction]:
     """
     Use the team-level model to get the probs of scoring or conceding
     N goals, and player-level model to get the chance of player scoring
     or assisting given that their team scores.
+
+    use_availability scales a player's points by FPL's reported chance of playing.
+    Set False for the old behaviour of zeroing players at 50% or below and ignoring
+    the doubt otherwise.
     """
     if isinstance(player, str | int):
         p = get_player(player, dbsession=dbsession)
@@ -469,6 +474,11 @@ def calc_predicted_points_for_player(
         # predicting for
         fixtures_behind = len(gw_range)
 
+    # Averaging the points over each of the recent minutes values is already a
+    # Monte Carlo estimate of the mixture over starting, a cameo, and not playing,
+    # so the estimator is right - but with only three samples it is noisy. This is
+    # the main dial on that noise; tune it with airsenal_replay_season rather than
+    # by eye, as a longer window also means staler form.
     fixtures_behind = max(fixtures_behind, min_fixtures_behind)
 
     team = player.team(
@@ -523,6 +533,17 @@ def calc_predicted_points_for_player(
         points = 0.0
         expected_points[gameweek] = points
 
+        # FPL's reported chance of playing, as a probability. A player who does not
+        # feature scores nothing, so this scales the points they would score if they
+        # did play. Zero for a player ruled out, one for a player with no doubt.
+        availability = (
+            player.availability(season, gw_range[0], gameweek)
+            if use_availability
+            else float(
+                not player.is_injured_or_suspended(season, gw_range[0], gameweek)
+            )
+        )
+
         if sum(recent_minutes) == 0:
             # 'recent_minutes' contains the number of minutes that player played for
             # in the past few matches. If these are all zero, we will for sure predict
@@ -530,7 +551,7 @@ def calc_predicted_points_for_player(
             # calculate appearance points, defending points, attacking points.
             points = 0.0
 
-        elif player.is_injured_or_suspended(season, gw_range[0], gameweek):
+        elif availability == 0.0:
             # Points for fixture will be zero if suspended or injured
             points = 0.0
         elif was_historic_absence(
@@ -567,6 +588,7 @@ def calc_predicted_points_for_player(
                     points += get_def_con_points(player.player_id, mins, df_def_con)
 
             points /= len(recent_minutes)
+            points *= availability
 
         # create the PlayerPrediction for this player+fixture
         if np.isnan(points):
@@ -593,6 +615,7 @@ def calc_predicted_points_for_pos(
     tag: str,
     model: NumpyroPlayerModel | ConjugatePlayerModel | None = None,
     dbsession: Session = session,
+    use_availability: bool = True,
 ) -> dict[int, list[PlayerPrediction]]:
     """
     Calculate points predictions for all players in a given position and
@@ -612,6 +635,7 @@ def calc_predicted_points_for_pos(
             gw_range=gw_range,
             tag=tag,
             dbsession=dbsession,
+            use_availability=use_availability,
         )
         for player in list_players(
             position=pos, season=season, gameweek=min(gw_range), dbsession=dbsession

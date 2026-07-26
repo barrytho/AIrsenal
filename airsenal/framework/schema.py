@@ -142,6 +142,28 @@ class Player(Base):
             ) and (attr.return_gameweek is None or attr.return_gameweek > fixture_gw)
         return False
 
+    def availability(self, season: str, current_gw: int, fixture_gw: int) -> float:
+        """FPL's estimated probability (0 to 1) that this player features in
+        fixture_gw, judged at current_gw.
+
+        is_injured_or_suspended() treats this as a cliff edge - out at 50% or below,
+        fully available at 51% - which throws away most of the signal. A 75% doubt
+        is a real risk and should discount the player's expected points, not be
+        ignored.
+
+        Returns 1.0 when FPL reports no doubt, or when the player is expected back
+        before the fixture.
+        """
+        attr = self.get_gameweek_attributes(season, current_gw)
+        if attr is None or isinstance(attr, tuple):
+            return 1.0
+        if attr.chance_of_playing_next_round is None:
+            return 1.0
+        if attr.return_gameweek is not None and attr.return_gameweek <= fixture_gw:
+            # expected back in time for this fixture
+            return 1.0
+        return max(0.0, min(1.0, attr.chance_of_playing_next_round / 100))
+
     def get_gameweek_attributes(
         self, season: str, gameweek: int | None, before_and_after: bool = False
     ) -> "PlayerAttributes | tuple[PlayerAttributes, PlayerAttributes] | None":
