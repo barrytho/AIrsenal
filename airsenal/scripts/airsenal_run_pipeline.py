@@ -22,6 +22,7 @@ from airsenal.framework.utils import (
     get_past_seasons,
     parse_team_model_from_str,
 )
+from airsenal.scripts.data_sanity_checks import run_all_checks
 from airsenal.scripts.fill_db_init import check_clean_db, make_init_db
 from airsenal.scripts.fill_predictedscore_table import (
     get_top_predicted_points,
@@ -142,6 +143,20 @@ from airsenal.scripts.update_db import update_db
     is_flag=True,
 )
 @click.option(
+    "--seed",
+    help=(
+        "Random seed, so repeated runs on the same predictions give the same "
+        "suggestions. Omit for a different search each run."
+    ),
+    type=int,
+    default=None,
+)
+@click.option(
+    "--check_data",
+    help="If set, run the data sanity checks after updating the database",
+    is_flag=True,
+)
+@click.option(
     "--save_absences",
     help="If set, save expected absences to 'absences_yyyy.csv' file",
     is_flag=True,
@@ -164,6 +179,8 @@ def run_pipeline(
     max_hit: int,
     allow_unused: bool,
     consider_available_chips: bool,
+    seed: int | None,
+    check_data: bool,
     save_absences: bool,
 ) -> None:
     """
@@ -220,6 +237,17 @@ def run_pipeline(
         else:
             click.echo("Database update complete..")
 
+        if check_data:
+            click.echo("Checking data..")
+            n_errors = run_all_checks()
+            if n_errors:
+                warnings.warn(
+                    f"Data sanity checks found {n_errors} errors. Predictions and "
+                    "suggestions below are built on that data - see the check "
+                    "output above before acting on them.",
+                    stacklevel=2,
+                )
+
         click.echo("Running prediction..")
         predict_ok = run_prediction(
             num_thread=num_thread,
@@ -257,6 +285,7 @@ def run_pipeline(
                 max_hit=max_hit,
                 allow_unused=allow_unused,
                 consider_available_chips=consider_available_chips,
+                random_state=seed,
             )
             if not opt_ok:
                 msg = "Problem running optimization"
@@ -382,6 +411,7 @@ def run_optimize_squad(
     max_hit: int,
     allow_unused: bool,
     consider_available_chips: bool = False,
+    random_state: int | None = None,
 ) -> bool:
     """
     Build the initial squad
@@ -401,6 +431,7 @@ def run_optimize_squad(
             max_total_hit=max_hit,
             allow_unused_transfers=allow_unused,
             consider_available_chips=consider_available_chips,
+            random_state=random_state,
         )
     return True
 

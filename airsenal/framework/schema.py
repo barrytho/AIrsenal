@@ -3,7 +3,10 @@ Interface to the SQL database.
 Use SQLAlchemy to convert between DB tables and python objects.
 """
 
+import shutil
 from contextlib import contextmanager
+from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from sqlalchemy import (
@@ -519,6 +522,42 @@ def get_connection_string() -> str:
         save_env("AIRSENAL_DB_FILE", db_file)
         return f"sqlite:///{db_file}"
     return f"sqlite:///{AIRSENAL_DB_FILE}"
+
+
+def get_db_file() -> Path | None:
+    """Path to the sqlite database file, or None if not using sqlite."""
+    if AIRSENAL_DB_URI:
+        return None
+    return Path(AIRSENAL_DB_FILE) if AIRSENAL_DB_FILE else AIRSENAL_HOME / "data.db"
+
+
+def backup_db(keep: int = 3) -> Path | None:
+    """
+    Copy the sqlite database to a timestamped file next to it, keeping the most
+    recent `keep` backups. Rebuilding the database takes several seasons' worth of
+    scraping, so it is worth a copy before anything that writes to it.
+
+    Returns the path written, or None if there was nothing to back up (no database
+    yet, or a postgres database, which we leave to the user's own backups).
+    """
+    db_file = get_db_file()
+    if db_file is None or not db_file.exists():
+        return None
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup = db_file.with_name(f"{db_file.name}.backup-{timestamp}")
+    # two backups within the same second would otherwise silently overwrite
+    suffix = 1
+    while backup.exists():
+        backup = db_file.with_name(f"{db_file.name}.backup-{timestamp}-{suffix}")
+        suffix += 1
+    shutil.copy2(db_file, backup)
+
+    old_backups = sorted(db_file.parent.glob(f"{db_file.name}.backup-*"))
+    for stale in old_backups[:-keep] if keep > 0 else old_backups:
+        stale.unlink()
+
+    return backup
 
 
 def get_session():

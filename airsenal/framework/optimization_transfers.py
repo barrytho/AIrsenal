@@ -316,6 +316,7 @@ def make_best_transfers(
     season: str,
     num_iter: int = 100,
     update_func_and_args: tuple[Callable, float, Process] | None = None,
+    random_state: int | None = None,
 ) -> tuple[Squad, dict[str, list[int]], float]:
     """
     Return a new squad and a dictionary {"in": [player_ids],
@@ -385,6 +386,7 @@ def make_best_transfers(
             triple_captain_gw=triple_captain_gw,
             population_size=num_iter,
             generations=num_iter,
+            random_state=random_state,
         )
         _in = [p.player_id for p in new_squad.players]
         players_in = [p for p in _in if p not in _out]  # remove duplicates
