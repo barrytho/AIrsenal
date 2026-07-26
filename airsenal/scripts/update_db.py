@@ -8,7 +8,12 @@ import argparse
 
 from sqlalchemy.orm.session import Session
 
-from airsenal.framework.schema import Player, database_is_empty, session_scope
+from airsenal.framework.schema import (
+    Player,
+    backup_db,
+    database_is_empty,
+    session_scope,
+)
 from airsenal.framework.transaction_utils import count_transactions, update_squad
 from airsenal.framework.utils import (
     CURRENT_SEASON,
@@ -162,8 +167,17 @@ def update_attributes(season: str, dbsession: Session) -> None:
 
 
 def update_db(
-    season: str, do_attributes: bool, fpl_team_id: int, session: Session
+    season: str,
+    do_attributes: bool,
+    fpl_team_id: int,
+    session: Session,
+    backup: bool = True,
 ) -> bool:
+    if backup:
+        backup_path = backup_db()
+        if backup_path is not None:
+            print(f"Backed up database to {backup_path}")
+
     # see if any new players have been added
     num_new_players = update_players(season, session)
 

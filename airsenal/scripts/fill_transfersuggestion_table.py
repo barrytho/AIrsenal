@@ -18,13 +18,17 @@ import argparse
 import cProfile
 import json
 import os
+import random
 import shutil
 import sys
 import time
+import traceback
 import warnings
 from collections.abc import Callable
-from multiprocessing import Process, Queue
+from multiprocessing import Event, Process, Queue
+from multiprocessing.synchronize import Event as EventType
 
+import numpy as np
 import regex as re
 import requests
 from prettytable import PrettyTable
@@ -74,7 +78,8 @@ def is_finished(final_expected_num: int) -> bool:
 
     # count the json files in the output dir
     json_count = len(os.listdir(OUTPUT_DIR))
-    return json_count == final_expected_num
+    # >= rather than ==: if the count is ever over-shot, workers must still stop
+    return json_count >= final_expected_num
 
 
 def optimize(
@@ -93,6 +98,8 @@ def optimize(
     resetter: Callable | None = None,
     profile: bool = False,
     max_free_transfers: int = MAX_FREE_TRANSFERS,
+    abort: EventType | None = None,
+    random_state: int | None = None,
 ) -> None:
     """
     Queue is the multiprocessing queue,
@@ -111,8 +118,109 @@ def optimize(
      strat_dict,
      strat_id
     )
+
+    If any worker raises, it sets the abort event so the others stop waiting for
+    output that is never going to arrive, rather than sleeping forever.
     """
+    try:
+        _optimize(
+            queue,
+            pid,
+            num_expected_outputs,
+            gameweek_range,
+            season,
+            pred_tag,
+            chips_gw_dict,
+            max_total_hit,
+            allow_unused_transfers,
+            max_transfers,
+            num_iterations,
+            updater,
+            resetter,
+            profile,
+            max_free_transfers,
+            abort,
+            random_state,
+        )
+    except Exception:
+        if abort is not None:
+            abort.set()
+        print(f"Strategy worker {pid} failed:\n{traceback.format_exc()}")
+        raise
+
+
+def wait_for_processes(
+    procs: list[Process],
+    abort: EventType,
+    num_expected_outputs: int,
+    poll_seconds: float = 1.0,
+) -> None:
+    """
+    Wait for the strategy workers to finish, and give up if they can't.
+
+    The workers stop when the output directory holds every strategy file we expect,
+    so a worker that dies takes the whole run down with it: the count never reaches
+    the target and the survivors sleep forever. Watch for a worker exiting non-zero
+    and stop the rest instead of hanging.
+    """
+    while any(p.is_alive() for p in procs):
+        crashed = [p for p in procs if not p.is_alive() and p.exitcode not in (0, None)]
+        if crashed and not is_finished(num_expected_outputs):
+            abort.set()
+            for p in procs:
+                if p.is_alive():
+                    p.terminate()
+            for p in procs:
+                p.join(timeout=10)
+            msg = (
+                f"{len(crashed)} of {len(procs)} strategy workers failed before "
+                "producing all the expected results (see the traceback above). "
+                "Optimisation aborted."
+            )
+            raise RuntimeError(msg)
+        time.sleep(poll_seconds)
+
+    for p in procs:
+        p.join()
+
+    if not is_finished(num_expected_outputs):
+        msg = (
+            f"Strategy workers exited with only {len(os.listdir(OUTPUT_DIR))} of "
+            f"{num_expected_outputs} expected results. Optimisation aborted."
+        )
+        raise RuntimeError(msg)
+
+
+def _optimize(
+    queue: Queue,
+    pid: Process,
+    num_expected_outputs: int,
+    gameweek_range: list[int],
+    season: str,
+    pred_tag: str,
+    chips_gw_dict: dict,
+    max_total_hit: int | None = None,
+    allow_unused_transfers: bool = False,
+    max_transfers: int = 2,
+    num_iterations: int = 100,
+    updater: Callable | None = None,
+    resetter: Callable | None = None,
+    profile: bool = False,
+    max_free_transfers: int = MAX_FREE_TRANSFERS,
+    abort: EventType | None = None,
+    random_state: int | None = None,
+) -> None:
+    """The body of optimize(), see there for details."""
+    if random_state is not None:
+        # offset by worker so the workers explore differently, but the run as a
+        # whole repeats given the same seed
+        random.seed(random_state + pid)
+        np.random.seed(random_state + pid)
+
     while True:
+        if abort is not None and abort.is_set():
+            print(f"Strategy worker {pid} stopping: another worker failed")
+            return
         if queue.qsize() > 0:
             status = queue.get()
         else:
@@ -210,6 +318,7 @@ def optimize(
                 season,
                 num_iterations,
                 (updater, increment, pid) if updater is not None else None,
+                random_state=random_state,
             )
 
             discount_factor = get_discount_factor(root_gw, gw)
@@ -429,6 +538,7 @@ def run_optimization(
     profile: bool = False,
     is_replay: bool = False,  # for replaying seasons
     max_free_transfers: int = MAX_FREE_TRANSFERS,
+    random_state: int | None = None,
 ) -> tuple[Squad, dict[str, dict[str, int | list[int]]] | None]:
     """
     This is the actual main function that sets up the multiprocessing
@@ -581,6 +691,7 @@ def run_optimization(
     #  total_score
     #  num_free_transfers
     #  budget
+    abort = Event()
     for i in range(num_thread):
         processor = Process(
             target=optimize,
@@ -599,6 +710,9 @@ def run_optimization(
                 update_progress,
                 reset_progress,
                 profile,
+                max_free_transfers,
+                abort,
+                random_state,
             ),
         )
         processor.daemon = True
@@ -607,10 +721,11 @@ def run_optimization(
     # add starting node to the queue
     squeue.put((0, num_free_transfers, 0, 0, starting_squad, {}, "starting"))
 
-    for i, p in enumerate(procs):
+    for i in range(len(procs)):
         progress_bars[i].close()
         progress_bars[i] = None
-        p.join()
+
+    wait_for_processes(procs, abort, num_expected_outputs)
 
     # find the best from all the strategies tried
     best_strategy = find_best_strat_from_json(tag)
@@ -779,6 +894,15 @@ def main():
         default=-1,
     )
     parser.add_argument(
+        "--seed",
+        help=(
+            "random seed, so repeated runs on the same predictions give the same "
+            "suggestions. Omit for a different search each run."
+        ),
+        type=int,
+        default=None,
+    )
+    parser.add_argument(
         "--num_free_transfers", help="how many free transfers do we have", type=int
     )
     parser.add_argument(
@@ -887,4 +1011,5 @@ def main():
             num_thread,
             profile,
             is_replay=args.is_replay,
+            random_state=args.seed,
         )

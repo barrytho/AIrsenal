@@ -89,8 +89,21 @@ def get_next_gameweek(
                 earliest_future_gameweek += 1
     else:
         # got no fixtures from database, maybe we're filling it for the first
-        # time - get next gameweek from API instead
-        fixture_data = fetcher.get_fixture_data()
+        # time - get next gameweek from API instead.
+        # NEXT_GAMEWEEK is computed at import time, so this runs on every CLI
+        # invocation when the database has no fixtures for the current season -
+        # which is the normal state between seasons. Don't let an API problem stop
+        # the import: assume the season hasn't started and carry on.
+        try:
+            fixture_data = fetcher.get_fixture_data()
+        except (requests.exceptions.RequestException, RuntimeError) as e:
+            warnings.warn(
+                f"No fixtures in the database for {season} and couldn't reach the "
+                f"FPL API to ask:\n{e}\nAssuming gameweek 1. If the season is under "
+                "way, run airsenal_update_db before trusting any results.",
+                stacklevel=2,
+            )
+            return 1
 
         if len(fixture_data) == 0:
             # if no fixtures scheduled assume this is start of season before
